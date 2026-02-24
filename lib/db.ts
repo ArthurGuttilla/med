@@ -29,6 +29,7 @@ function initSchema(db: Database.Database) {
       insurance TEXT DEFAULT '',
       blood_type TEXT DEFAULT '',
       allergies TEXT DEFAULT '',
+      tropicalia_project_id TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -65,4 +66,12 @@ function initSchema(db: Database.Database) {
       created_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // Runtime migration: add tropicalia_project_id to patients if it doesn't exist yet
+  const cols = db
+    .prepare("PRAGMA table_info(patients)")
+    .all() as Array<{ name: string }>;
+  if (!cols.find((c) => c.name === "tropicalia_project_id")) {
+    db.exec("ALTER TABLE patients ADD COLUMN tropicalia_project_id TEXT");
+  }
 }

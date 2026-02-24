@@ -10,6 +10,7 @@ export interface Patient {
   insurance: string;
   blood_type: string;
   allergies: string;
+  tropicalia_project_id: string | null;
   created_at: string;
 }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { seedDatabase } from "@/lib/seed";
+import { ensurePatientProject } from "@/lib/tropicalia";
 
 export async function GET() {
   try {
@@ -32,7 +33,14 @@ export async function POST(req: NextRequest) {
       body.phone || "", body.email || "", body.address || "",
       body.insurance || "", body.blood_type || "", body.allergies || ""
     );
-    const patient = db.prepare("SELECT * FROM patients WHERE id = ?").get(result.lastInsertRowid);
+    const patientId = result.lastInsertRowid as number;
+
+    // Create a Tropicalia project for the patient (non-blocking, best-effort)
+    ensurePatientProject(patientId).catch((err) =>
+      console.error("[Tropicalia] project creation error:", err)
+    );
+
+    const patient = db.prepare("SELECT * FROM patients WHERE id = ?").get(patientId);
     return NextResponse.json(patient, { status: 201 });
   } catch (error) {
     console.error(error);

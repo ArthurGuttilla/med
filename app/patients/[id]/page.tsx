@@ -150,6 +150,26 @@ export default function PatientPage() {
                     {patient.blood_type}
                   </span>
                 )}
+                {patient.tropicalia_project_id ? (
+                  <span
+                    title={`Tropicalia project: ${patient.tropicalia_project_id}`}
+                    className="flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-xs font-medium border border-emerald-200"
+                  >
+                    {/* Palm tree icon */}
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M17 8C8 10 5.9 16.17 3.82 21H5.1c.75-1.89 1.9-3.8 3.43-5.49L10 17l1-2-1.51-1.51C10.31 12.1 11.46 11 13 10.17L12 13h2l2-5c.26-.08.53-.15.8-.22L17 8z"/>
+                      <path d="M17 8c0-2.21-1.79-4-4-4s-4 1.79-4 4c0 .12.02.23.03.35C10.33 7.5 11.63 7 13 7c1.02 0 1.96.3 2.75.8C15.92 8.21 17 8 17 8z" opacity=".6"/>
+                    </svg>
+                    Tropicalia
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-400 rounded text-xs border border-gray-200">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    No project
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -377,6 +397,17 @@ export default function PatientPage() {
                         <span className={`text-xs px-2 py-0.5 rounded-full border ${NOTE_TYPE_COLORS[note.note_type] || NOTE_TYPE_COLORS.general}`}>
                           {note.note_type}
                         </span>
+                        {patient.tropicalia_project_id && (
+                          <span
+                            title="Synced to Tropicalia context"
+                            className="flex items-center gap-1 text-xs px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded border border-emerald-200"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+                            </svg>
+                            synced
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-gray-400 mt-1">{new Date(note.created_at).toLocaleString()}</p>
                       <p className="mt-3 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{note.content}</p>
