@@ -31,7 +31,7 @@ export default function HomePage() {
     setLoading(true);
     const res = await fetch("/api/patients");
     const data = await res.json();
-    setPatients(data);
+    setPatients(Array.isArray(data) ? data : []);
     setLoading(false);
   }, []);
 

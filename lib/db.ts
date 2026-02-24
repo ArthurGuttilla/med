@@ -1,7 +1,10 @@
 import Database from "better-sqlite3";
 import path from "path";
 
-const DB_PATH = path.join(process.cwd(), "data.db");
+// Vercel's project directory is read-only; use /tmp for the writable ephemeral volume.
+const DB_PATH = process.env.VERCEL
+  ? "/tmp/data.db"
+  : path.join(process.cwd(), "data.db");
 
 let db: Database.Database | null = null;
 
