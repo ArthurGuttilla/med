@@ -68,6 +68,47 @@ export async function ensurePatientProject(
   return project.public_id;
 }
 
+// ─── Search / retrieval ───────────────────────────────────────────────────────
+
+export interface TropicaliaChunk {
+  content: string;
+  document_id: string;
+  filename: string;
+  score: number;
+}
+
+/**
+ * Semantic search over the documents in a project.
+ * Returns ranked chunks relevant to the query, or an empty array on failure.
+ */
+export async function searchProject(
+  projectId: string,
+  query: string,
+  topK = 5
+): Promise<TropicaliaChunk[]> {
+  if (!isEnabled()) return [];
+
+  try {
+    const res = await fetch(`${BASE}/projects/${projectId}/search`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ query, top_k: topK }),
+    });
+
+    if (!res.ok) {
+      console.error(`[Tropicalia] search failed ${res.status}: ${await res.text()}`);
+      return [];
+    }
+
+    const data = await res.json();
+    // API may return { results: [...] } or { chunks: [...] } — handle both
+    return (data.results ?? data.chunks ?? []) as TropicaliaChunk[];
+  } catch (err) {
+    console.error("[Tropicalia] searchProject error:", err);
+    return [];
+  }
+}
+
 // ─── File upload ─────────────────────────────────────────────────────────────
 
 interface UploadResponse {
