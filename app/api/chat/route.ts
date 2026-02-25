@@ -50,8 +50,6 @@ export async function POST(req: NextRequest) {
     ).run(currentSessionId, message);
 
     // ── Tropicalia RAG ───────────────────────────────────────────────────────
-    // Resolve project ID — relinking from the Tropicalia API if the DB lost it
-    // after a Vercel cold start (SQLite in /tmp is ephemeral).
     let tropicaliaChunks: TropicaliaChunk[] = [];
     let tropicaliaCompletion: string | null = null;
     const projectId = await ensurePatientProject(patient_id);
@@ -61,9 +59,60 @@ export async function POST(req: NextRequest) {
       tropicaliaCompletion = result.completion;
     }
 
-    const hasTropicaliaContext = tropicaliaChunks.length > 0 || !!tropicaliaCompletion;
+    const sources = tropicaliaChunks.map((c) => ({
+      document_id: c.document_id,
+      filename: c.filename,
+      score: c.score,
+    }));
 
-    // ── Build system prompt ──────────────────────────────────────────────────
+    const encoder = new TextEncoder();
+
+    // ── Path 1: stream Tropicalia's synthesized answer directly ──────────────
+    if (tropicaliaCompletion) {
+      const answer = tropicaliaCompletion;
+      const stream = new ReadableStream({
+        async start(controller) {
+          try {
+            // Send in small chunks so the UI renders progressively
+            const CHUNK = 40;
+            for (let i = 0; i < answer.length; i += CHUNK) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ text: answer.slice(i, i + CHUNK) })}\n\n`
+                )
+              );
+            }
+
+            db.prepare(
+              "INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'assistant', ?)"
+            ).run(currentSessionId, answer);
+
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ done: true, session_id: currentSessionId, sources })}\n\n`
+              )
+            );
+          } catch (err) {
+            console.error("[chat] Tropicalia stream error:", err);
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ error: "Stream failed" })}\n\n`)
+            );
+          } finally {
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      });
+    }
+
+    // ── Path 2: fall back to Claude when Tropicalia has no answer ────────────
     const vitalRecords = records.filter((r) => r.record_type === "vital");
     const diagnoses = records.filter((r) => r.record_type === "diagnosis");
     const medications = records.filter((r) => r.record_type === "medication");
@@ -130,33 +179,16 @@ ${
     .join("\n\n") || "No notes documented"
 }
 ${
-  hasTropicaliaContext
-    ? `
----
-## Retrieved from Knowledge Base (Tropicalia)
-${
-  tropicaliaCompletion
-    ? `**Knowledge-base synthesis:** ${tropicaliaCompletion}\n`
-    : ""
-}${
   tropicaliaChunks.length > 0
-    ? `The following passages were retrieved from the patient's medical record knowledge base as most relevant to this question:\n\n${tropicaliaChunks
-        .map(
-          (chunk, i) =>
-            `### Source ${i + 1}: ${chunk.filename}\n${chunk.content}`
-        )
-        .join("\n\n")}`
-    : ""
-}
-
-Use these retrieved passages as additional authoritative context when forming your answer.`
+    ? `\n---\n## Retrieved passages from knowledge base\n${tropicaliaChunks
+        .map((chunk, i) => `### Source ${i + 1}: ${chunk.filename}\n${chunk.content}`)
+        .join("\n\n")}\n\nUse these retrieved passages as additional authoritative context when forming your answer.`
     : ""
 }
 
 ---
 Answer questions about this patient based on the above clinical data. If asked about topics outside the patient's record, clarify what information is available. Always remind the doctor to verify information against source systems.`;
 
-    // Build messages for Claude
     const messages: Array<{ role: "user" | "assistant"; content: string }> = [
       ...history.map((h) => ({
         role: h.role as "user" | "assistant",
@@ -165,8 +197,6 @@ Answer questions about this patient based on the above clinical data. If asked a
       { role: "user", content: message },
     ];
 
-    // Stream the response
-    const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         let assistantMessage = "";
@@ -193,17 +223,9 @@ Answer questions about this patient based on the above clinical data. If asked a
             }
           }
 
-          // Save assistant message
           db.prepare(
             "INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'assistant', ?)"
           ).run(currentSessionId, assistantMessage);
-
-          // Emit sources from Tropicalia alongside the done signal
-          const sources = tropicaliaChunks.map((c) => ({
-            document_id: c.document_id,
-            filename: c.filename,
-            score: c.score,
-          }));
 
           controller.enqueue(
             encoder.encode(
@@ -211,7 +233,7 @@ Answer questions about this patient based on the above clinical data. If asked a
             )
           );
         } catch (err) {
-          console.error("[chat] stream error:", err);
+          console.error("[chat] Claude stream error:", err);
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ error: "Stream failed" })}\n\n`)
           );
