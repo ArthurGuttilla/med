@@ -89,18 +89,25 @@ export async function searchProject(
   if (!isEnabled()) return [];
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
     const res = await fetch(`${BASE}/projects/${projectId}/search`, {
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ query, top_k: topK }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     if (!res.ok) {
-      console.error(`[Tropicalia] search failed ${res.status}: ${await res.text()}`);
+      const body = await res.text();
+      console.error(`[Tropicalia] search failed ${res.status}: ${body}`);
       return [];
     }
 
     const data = await res.json();
+    console.log("[Tropicalia] search raw response:", JSON.stringify(data).slice(0, 500));
     // API may return { results: [...] } or { chunks: [...] } — handle both
     return (data.results ?? data.chunks ?? []) as TropicaliaChunk[];
   } catch (err) {
