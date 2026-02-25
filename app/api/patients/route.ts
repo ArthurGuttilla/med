@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { seedDatabase } from "@/lib/seed";
-import { ensurePatientProject } from "@/lib/tropicalia";
+import { ensurePatientProject, syncPatientFullRecord } from "@/lib/tropicalia";
 
 export async function GET() {
   try {
@@ -13,7 +13,17 @@ export async function GET() {
         (SELECT recorded_at FROM patient_records WHERE patient_id = p.id ORDER BY recorded_at DESC LIMIT 1) as last_record_date
       FROM patients p
       ORDER BY p.name ASC
-    `).all();
+    `).all() as Array<{ id: number; tropicalia_project_id: string | null }>;
+
+    // For any patient without a Tropicalia project, create one and upload their full record.
+    // Runs async and non-blocking so it never delays the response.
+    const unsynced = patients.filter((p) => !p.tropicalia_project_id);
+    for (const p of unsynced) {
+      syncPatientFullRecord(p.id).catch((err) =>
+        console.error("[Tropicalia] full-record sync error for patient", p.id, err)
+      );
+    }
+
     return NextResponse.json(patients);
   } catch (error) {
     console.error(error);

@@ -142,6 +142,206 @@ export async function syncNoteToProject(
   return res.json();
 }
 
+// ─── Full patient record ──────────────────────────────────────────────────────
+
+function formatPatientFullRecord(
+  patient: {
+    mrn: string;
+    name: string;
+    dob: string;
+    gender: string;
+    phone: string;
+    email: string;
+    address: string;
+    insurance: string;
+    blood_type: string;
+    allergies: string;
+  },
+  records: Array<{ record_type: string; title: string; data: string; recorded_at: string }>,
+  notes: Array<{ title: string; content: string; note_type: string; created_at: string }>
+): string {
+  const lines: string[] = [
+    "PATIENT MEDICAL RECORD",
+    "======================",
+    "",
+    "DEMOGRAPHICS",
+    "------------",
+    `Name         : ${patient.name}`,
+    `MRN          : ${patient.mrn}`,
+    `Date of Birth: ${patient.dob}`,
+    `Gender       : ${patient.gender}`,
+    `Blood Type   : ${patient.blood_type || "Unknown"}`,
+    `Phone        : ${patient.phone || "—"}`,
+    `Email        : ${patient.email || "—"}`,
+    `Address      : ${patient.address || "—"}`,
+    `Insurance    : ${patient.insurance || "—"}`,
+    `Allergies    : ${patient.allergies || "None documented"}`,
+    "",
+  ];
+
+  const byType = (type: string) => records.filter((r) => r.record_type === type);
+
+  const diagnoses = byType("diagnosis");
+  if (diagnoses.length > 0) {
+    lines.push("DIAGNOSES", "---------");
+    for (const d of diagnoses) {
+      const data = JSON.parse(d.data);
+      lines.push(`• ${d.title}`);
+      if (data.icd10) lines.push(`  ICD-10   : ${data.icd10}`);
+      if (data.status) lines.push(`  Status   : ${data.status}`);
+      if (data.onset) lines.push(`  Onset    : ${data.onset}`);
+      if (data.severity) lines.push(`  Severity : ${data.severity}`);
+      if (data.smokingHistory) lines.push(`  History  : ${data.smokingHistory}`);
+    }
+    lines.push("");
+  }
+
+  const medications = byType("medication");
+  if (medications.length > 0) {
+    lines.push("MEDICATIONS", "-----------");
+    for (const m of medications) {
+      const data = JSON.parse(m.data);
+      lines.push(`• ${m.title}`);
+      if (data.frequency) lines.push(`  Frequency  : ${data.frequency}`);
+      if (data.route) lines.push(`  Route      : ${data.route}`);
+      if (data.prescriber) lines.push(`  Prescriber : ${data.prescriber}`);
+      if (data.startDate) lines.push(`  Start Date : ${data.startDate}`);
+    }
+    lines.push("");
+  }
+
+  const vitals = byType("vital");
+  if (vitals.length > 0) {
+    lines.push("VITALS", "------");
+    for (const v of vitals) {
+      const data = JSON.parse(v.data);
+      const value = data.systolic
+        ? `${data.systolic}/${data.diastolic} ${data.unit}`
+        : `${data.value} ${data.unit}`;
+      lines.push(`• ${v.title}: ${value}  (${v.recorded_at.slice(0, 10)})`);
+      if (data.note) lines.push(`  Note: ${data.note}`);
+    }
+    lines.push("");
+  }
+
+  const labs = byType("lab");
+  if (labs.length > 0) {
+    lines.push("LAB RESULTS", "-----------");
+    for (const l of labs) {
+      const data = JSON.parse(l.data);
+      lines.push(
+        `• ${l.title}: ${data.value} ${data.unit}  [ref: ${data.reference}]  Status: ${data.status}`
+      );
+      if (data.trend) lines.push(`  Trend: ${data.trend}`);
+    }
+    lines.push("");
+  }
+
+  const procedures = byType("procedure");
+  if (procedures.length > 0) {
+    lines.push("PROCEDURES", "----------");
+    for (const p of procedures) {
+      const data = JSON.parse(p.data);
+      lines.push(`• ${p.title}  (${p.recorded_at.slice(0, 10)})`);
+      if (data.result) lines.push(`  Result: ${data.result}`);
+      if (data.fev1) lines.push(`  FEV1: ${data.fev1}%, FVC: ${data.fvc}%, FEV1/FVC: ${data.fev1_fvc}%`);
+    }
+    lines.push("");
+  }
+
+  if (notes.length > 0) {
+    lines.push("CLINICAL NOTES", "--------------");
+    for (const note of notes) {
+      lines.push(
+        `[${note.note_type.toUpperCase()}] ${note.title}  —  ${note.created_at.slice(0, 10)}`
+      );
+      lines.push("─".repeat(60));
+      lines.push(note.content);
+      lines.push("");
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Creates a Tropicalia project for the patient (if one doesn't exist) and
+ * uploads a comprehensive document containing all their medical data.
+ * Never throws — failures are logged but don't interrupt the caller.
+ */
+export async function syncPatientFullRecord(patientId: number): Promise<void> {
+  if (!isEnabled()) return;
+
+  try {
+    const projectId = await ensurePatientProject(patientId);
+    if (!projectId) return;
+
+    const db = getDb();
+    const patient = db.prepare("SELECT * FROM patients WHERE id = ?").get(patientId) as
+      | {
+          mrn: string;
+          name: string;
+          dob: string;
+          gender: string;
+          phone: string;
+          email: string;
+          address: string;
+          insurance: string;
+          blood_type: string;
+          allergies: string;
+        }
+      | undefined;
+    if (!patient) return;
+
+    const records = db
+      .prepare(
+        "SELECT record_type, title, data, recorded_at FROM patient_records WHERE patient_id = ? ORDER BY recorded_at ASC"
+      )
+      .all(patientId) as Array<{
+      record_type: string;
+      title: string;
+      data: string;
+      recorded_at: string;
+    }>;
+
+    const notes = db
+      .prepare(
+        "SELECT title, content, note_type, created_at FROM notes WHERE patient_id = ? ORDER BY created_at ASC"
+      )
+      .all(patientId) as Array<{
+      title: string;
+      content: string;
+      note_type: string;
+      created_at: string;
+    }>;
+
+    const text = formatPatientFullRecord(patient, records, notes);
+    const filename = `patient-${patient.mrn}-full-record.txt`;
+
+    const form = new FormData();
+    form.append("file", new Blob([text], { type: "text/plain" }), filename);
+
+    const res = await fetch(`${BASE}/projects/${projectId}/upload`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: form,
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[Tropicalia] full-record upload failed ${res.status}: ${body}`);
+      return;
+    }
+
+    const result = (await res.json()) as UploadResponse;
+    console.log(
+      `[Tropicalia] Full record for ${patient.name} (${patient.mrn}) synced → document ${result.document_id}`
+    );
+  } catch (err) {
+    console.error(`[Tropicalia] syncPatientFullRecord error:`, err);
+  }
+}
+
 /**
  * Convenience: ensures a project exists for the patient, then uploads the note.
  * Silently skips if TROPICALIA_API_KEY is not set.
