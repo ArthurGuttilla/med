@@ -123,6 +123,24 @@ async function listDocuments(projectId: string): Promise<TropicaliaDocument[]> {
   }
 }
 
+export async function deleteDocument(
+  projectId: string,
+  documentId: string
+): Promise<void> {
+  try {
+    const res = await fetch(`${BASE}/projects/${projectId}/documents/${documentId}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[Tropicalia] deleteDocument ${documentId} failed ${res.status}: ${body}`);
+    }
+  } catch (err) {
+    console.error("[Tropicalia] deleteDocument error:", err);
+  }
+}
+
 // ─── Search / retrieval ───────────────────────────────────────────────────────
 
 export interface TropicaliaChunk {
@@ -499,6 +517,7 @@ export async function syncNoteForPatient(
     note_type: string;
     created_at: string;
     updated_at: string;
+    tropicalia_document_id?: string | null;
   }
 ): Promise<void> {
   if (!isEnabled()) return;
@@ -516,8 +535,18 @@ export async function syncNoteForPatient(
 
     if (!patient) return;
 
+    // Delete the previously uploaded document so we don't accumulate duplicates
+    if (note.tropicalia_document_id) {
+      await deleteDocument(projectId, note.tropicalia_document_id);
+    }
+
     const result = await syncNoteToProject(projectId, note, patient);
     if (result) {
+      // Persist the new document_id so future edits/deletes can target it
+      db.prepare("UPDATE notes SET tropicalia_document_id = ? WHERE id = ?").run(
+        result.document_id,
+        note.id
+      );
       console.log(
         `[Tropicalia] note ${note.id} synced → document ${result.document_id}`
       );

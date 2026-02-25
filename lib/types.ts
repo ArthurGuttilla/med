@@ -31,6 +31,7 @@ export interface Note {
   note_type: "progress" | "consultation" | "discharge" | "admission" | "general";
   created_at: string;
   updated_at: string;
+  tropicalia_document_id: string | null;
 }
 
 export interface ChatMessage {

@@ -77,4 +77,12 @@ function initSchema(db: Database.Database) {
   if (!cols.find((c) => c.name === "tropicalia_project_id")) {
     db.exec("ALTER TABLE patients ADD COLUMN tropicalia_project_id TEXT");
   }
+
+  // Runtime migration: add tropicalia_document_id to notes if it doesn't exist yet
+  const noteCols = db
+    .prepare("PRAGMA table_info(notes)")
+    .all() as Array<{ name: string }>;
+  if (!noteCols.find((c) => c.name === "tropicalia_document_id")) {
+    db.exec("ALTER TABLE notes ADD COLUMN tropicalia_document_id TEXT");
+  }
 }

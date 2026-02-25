@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { syncNoteForPatient } from "@/lib/tropicalia";
+import { syncNoteForPatient, deleteDocument } from "@/lib/tropicalia";
 import type { Note } from "@/lib/types";
 
 export async function PUT(
@@ -38,6 +38,21 @@ export async function DELETE(
   try {
     const { id } = await params;
     const db = getDb();
+
+    const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(id) as Note | undefined;
+
+    if (note?.tropicalia_document_id) {
+      const patient = db
+        .prepare("SELECT tropicalia_project_id FROM patients WHERE id = ?")
+        .get(note.patient_id) as { tropicalia_project_id: string | null } | undefined;
+
+      if (patient?.tropicalia_project_id) {
+        deleteDocument(patient.tropicalia_project_id, note.tropicalia_document_id).catch(
+          (err) => console.error("[Tropicalia] delete error:", err)
+        );
+      }
+    }
+
     db.prepare("DELETE FROM notes WHERE id = ?").run(id);
     return NextResponse.json({ success: true });
   } catch (error) {
