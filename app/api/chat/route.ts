@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "@/lib/db";
-import { searchProject, TropicaliaChunk } from "@/lib/tropicalia";
+import { ensurePatientProject, searchProject, TropicaliaChunk } from "@/lib/tropicalia";
 
 const client = new Anthropic();
 
@@ -50,14 +50,18 @@ export async function POST(req: NextRequest) {
     ).run(currentSessionId, message);
 
     // ── Tropicalia RAG ───────────────────────────────────────────────────────
-    // Query the patient's Tropicalia project for chunks relevant to the user's message.
+    // Resolve project ID — relinking from the Tropicalia API if the DB lost it
+    // after a Vercel cold start (SQLite in /tmp is ephemeral).
     let tropicaliaChunks: TropicaliaChunk[] = [];
-    const projectId = patient.tropicalia_project_id as string | undefined;
+    let tropicaliaCompletion: string | null = null;
+    const projectId = await ensurePatientProject(patient_id);
     if (projectId) {
-      tropicaliaChunks = await searchProject(projectId, message);
+      const result = await searchProject(projectId, message);
+      tropicaliaChunks = result.chunks;
+      tropicaliaCompletion = result.completion;
     }
 
-    const hasTropicaliaContext = tropicaliaChunks.length > 0;
+    const hasTropicaliaContext = tropicaliaChunks.length > 0 || !!tropicaliaCompletion;
 
     // ── Build system prompt ──────────────────────────────────────────────────
     const vitalRecords = records.filter((r) => r.record_type === "vital");
@@ -130,14 +134,20 @@ ${
     ? `
 ---
 ## Retrieved from Knowledge Base (Tropicalia)
-The following passages were retrieved from the patient's medical record knowledge base as most relevant to this question:
-
-${tropicaliaChunks
-  .map(
-    (chunk, i) =>
-      `### Source ${i + 1}: ${chunk.filename} (relevance: ${(chunk.score * 100).toFixed(0)}%)\n${chunk.content}`
-  )
-  .join("\n\n")}
+${
+  tropicaliaCompletion
+    ? `**Knowledge-base synthesis:** ${tropicaliaCompletion}\n`
+    : ""
+}${
+  tropicaliaChunks.length > 0
+    ? `The following passages were retrieved from the patient's medical record knowledge base as most relevant to this question:\n\n${tropicaliaChunks
+        .map(
+          (chunk, i) =>
+            `### Source ${i + 1}: ${chunk.filename}\n${chunk.content}`
+        )
+        .join("\n\n")}`
+    : ""
+}
 
 Use these retrieved passages as additional authoritative context when forming your answer.`
     : ""

@@ -132,16 +132,26 @@ export interface TropicaliaChunk {
   score: number;
 }
 
+export interface TropicaliaSearchResult {
+  chunks: TropicaliaChunk[];
+  /** AI-synthesised answer returned directly by the Tropicalia API, if present. */
+  completion: string | null;
+}
+
 /**
  * Semantic search over the documents in a project.
- * Returns ranked chunks relevant to the query, or an empty array on failure.
+ * Returns ranked chunks and an optional pre-synthesised completion,
+ * or empty results on failure.
+ *
+ * The Tropicalia /search endpoint returns:
+ *   { completion: string, retrieval_contents: Array<{ document, metadata, score }> }
  */
 export async function searchProject(
   projectId: string,
   query: string,
   topK = 5
-): Promise<TropicaliaChunk[]> {
-  if (!isEnabled()) return [];
+): Promise<TropicaliaSearchResult> {
+  if (!isEnabled()) return { chunks: [], completion: null };
 
   try {
     const controller = new AbortController();
@@ -158,16 +168,29 @@ export async function searchProject(
     if (!res.ok) {
       const body = await res.text();
       console.error(`[Tropicalia] search failed ${res.status}: ${body}`);
-      return [];
+      return { chunks: [], completion: null };
     }
 
     const data = await res.json();
-    console.log("[Tropicalia] search raw response:", JSON.stringify(data).slice(0, 500));
-    // API may return { results: [...] } or { chunks: [...] } — handle both
-    return (data.results ?? data.chunks ?? []) as TropicaliaChunk[];
+
+    // Map retrieval_contents → TropicaliaChunk[]
+    const raw: Array<{
+      document: string;
+      metadata: { document_id: string; file_name: string };
+      score: number;
+    }> = data.retrieval_contents ?? [];
+
+    const chunks: TropicaliaChunk[] = raw.map((r) => ({
+      content: r.document,
+      document_id: r.metadata?.document_id ?? "",
+      filename: r.metadata?.file_name ?? "",
+      score: r.score ?? 0,
+    }));
+
+    return { chunks, completion: (data.completion as string | null) ?? null };
   } catch (err) {
     console.error("[Tropicalia] searchProject error:", err);
-    return [];
+    return { chunks: [], completion: null };
   }
 }
 
