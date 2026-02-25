@@ -270,7 +270,10 @@ export async function syncNoteToProject(
   },
   patient: { name: string; mrn: string; dob: string; allergies: string }
 ): Promise<UploadResponse | null> {
-  if (!isEnabled()) return null;
+  if (!isEnabled()) {
+    console.warn("[Tropicalia] syncNoteToProject skipped: TROPICALIA_API_KEY not set");
+    return null;
+  }
 
   const text = formatNoteAsMarkdown(note, patient);
   const filename = `note-${note.id}-${note.note_type}-${note.created_at
@@ -280,19 +283,34 @@ export async function syncNoteToProject(
   const form = new FormData();
   form.append("file", new Blob([text], { type: "text/markdown" }), filename);
 
-  const res = await fetch(`${BASE}/projects/${projectId}/upload`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: form,
-  });
+  console.log(`[Tropicalia] uploading note ${note.id} ("${filename}") to project ${projectId}`);
 
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(`[Tropicalia] upload failed ${res.status}: ${body}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(`${BASE}/projects/${projectId}/upload`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: form,
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[Tropicalia] upload failed ${res.status}: ${body}`);
+      return null;
+    }
+
+    const data = (await res.json()) as UploadResponse;
+    console.log(`[Tropicalia] upload OK → document_id=${data.document_id}`);
+    return data;
+  } catch (err) {
+    clearTimeout(timeout);
+    console.error("[Tropicalia] syncNoteToProject fetch error:", err);
     return null;
   }
-
-  return res.json();
 }
 
 // ─── Full patient record ──────────────────────────────────────────────────────
@@ -520,11 +538,19 @@ export async function syncNoteForPatient(
     tropicalia_document_id?: string | null;
   }
 ): Promise<void> {
-  if (!isEnabled()) return;
+  if (!isEnabled()) {
+    console.warn("[Tropicalia] syncNoteForPatient skipped: TROPICALIA_API_KEY not set");
+    return;
+  }
 
   try {
+    console.log(`[Tropicalia] syncNoteForPatient: note=${note.id} patient=${patientId}`);
+
     const projectId = await ensurePatientProject(patientId);
-    if (!projectId) return;
+    if (!projectId) {
+      console.error(`[Tropicalia] syncNoteForPatient: could not resolve project for patient ${patientId}`);
+      return;
+    }
 
     const db = getDb();
     const patient = db
@@ -533,10 +559,14 @@ export async function syncNoteForPatient(
       | { name: string; mrn: string; dob: string; allergies: string }
       | undefined;
 
-    if (!patient) return;
+    if (!patient) {
+      console.error(`[Tropicalia] syncNoteForPatient: patient ${patientId} not found in DB`);
+      return;
+    }
 
     // Delete the previously uploaded document so we don't accumulate duplicates
     if (note.tropicalia_document_id) {
+      console.log(`[Tropicalia] deleting old document ${note.tropicalia_document_id}`);
       await deleteDocument(projectId, note.tropicalia_document_id);
     }
 
@@ -547,9 +577,9 @@ export async function syncNoteForPatient(
         result.document_id,
         note.id
       );
-      console.log(
-        `[Tropicalia] note ${note.id} synced → document ${result.document_id}`
-      );
+      console.log(`[Tropicalia] note ${note.id} synced → document ${result.document_id}`);
+    } else {
+      console.error(`[Tropicalia] syncNoteForPatient: upload returned null for note ${note.id}`);
     }
   } catch (err) {
     console.error(`[Tropicalia] syncNoteForPatient error:`, err);

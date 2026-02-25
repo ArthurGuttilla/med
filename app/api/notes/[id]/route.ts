@@ -19,10 +19,8 @@ export async function PUT(
 
     const note = db.prepare("SELECT * FROM notes WHERE id = ?").get(id) as Note;
 
-    // Sync updated note to Tropicalia asynchronously
-    syncNoteForPatient(note.patient_id, note).catch((err) =>
-      console.error("[Tropicalia] sync error:", err)
-    );
+    // Await so the upload completes before the response is sent
+    await syncNoteForPatient(note.patient_id, note);
 
     return NextResponse.json(note);
   } catch (error) {

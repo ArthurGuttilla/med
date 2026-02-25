@@ -23,10 +23,9 @@ export async function POST(req: NextRequest) {
       .prepare("SELECT * FROM notes WHERE id = ?")
       .get(result.lastInsertRowid) as Note;
 
-    // Sync to Tropicalia asynchronously — never blocks the HTTP response
-    syncNoteForPatient(body.patient_id, note).catch((err) =>
-      console.error("[Tropicalia] sync error:", err)
-    );
+    // Await so the upload completes before the response is sent —
+    // fire-and-forget risks the runtime killing the fetch mid-flight.
+    await syncNoteForPatient(Number(body.patient_id), note);
 
     return NextResponse.json(note, { status: 201 });
   } catch (error) {
