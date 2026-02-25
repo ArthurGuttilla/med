@@ -171,46 +171,53 @@ Answer questions about this patient based on the above clinical data. If asked a
       async start(controller) {
         let assistantMessage = "";
 
-        const anthropicStream = await client.messages.stream({
-          model: "claude-opus-4-6",
-          max_tokens: 2048,
-          thinking: { type: "adaptive" },
-          system: systemPrompt,
-          messages,
-        });
+        try {
+          const anthropicStream = await client.messages.stream({
+            model: "claude-opus-4-6",
+            max_tokens: 2048,
+            system: systemPrompt,
+            messages,
+          });
 
-        for await (const event of anthropicStream) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            assistantMessage += event.delta.text;
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ text: event.delta.text })}\n\n`
-              )
-            );
+          for await (const event of anthropicStream) {
+            if (
+              event.type === "content_block_delta" &&
+              event.delta.type === "text_delta"
+            ) {
+              assistantMessage += event.delta.text;
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ text: event.delta.text })}\n\n`
+                )
+              );
+            }
           }
+
+          // Save assistant message
+          db.prepare(
+            "INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'assistant', ?)"
+          ).run(currentSessionId, assistantMessage);
+
+          // Emit sources from Tropicalia alongside the done signal
+          const sources = tropicaliaChunks.map((c) => ({
+            document_id: c.document_id,
+            filename: c.filename,
+            score: c.score,
+          }));
+
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ done: true, session_id: currentSessionId, sources })}\n\n`
+            )
+          );
+        } catch (err) {
+          console.error("[chat] stream error:", err);
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ error: "Stream failed" })}\n\n`)
+          );
+        } finally {
+          controller.close();
         }
-
-        // Save assistant message
-        db.prepare(
-          "INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'assistant', ?)"
-        ).run(currentSessionId, assistantMessage);
-
-        // Emit sources from Tropicalia alongside the done signal
-        const sources = tropicaliaChunks.map((c) => ({
-          document_id: c.document_id,
-          filename: c.filename,
-          score: c.score,
-        }));
-
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({ done: true, session_id: currentSessionId, sources })}\n\n`
-          )
-        );
-        controller.close();
       },
     });
 
