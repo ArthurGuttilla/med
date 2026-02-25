@@ -201,7 +201,7 @@ interface UploadResponse {
   filename: string;
 }
 
-function formatNoteAsText(
+function formatNoteAsMarkdown(
   note: {
     id: number;
     title: string;
@@ -213,19 +213,28 @@ function formatNoteAsText(
   patient: { name: string; mrn: string; dob: string; allergies: string }
 ): string {
   return [
-    "CLINICAL NOTE",
-    "=============",
-    `Patient  : ${patient.name}`,
-    `MRN      : ${patient.mrn}`,
-    `DOB      : ${patient.dob}`,
-    `Allergies: ${patient.allergies || "None documented"}`,
+    `# ${note.title}`,
     "",
-    `Title    : ${note.title}`,
-    `Type     : ${note.note_type}`,
-    `Date     : ${note.created_at}`,
-    `Updated  : ${note.updated_at}`,
+    "## Patient Information",
     "",
-    "─".repeat(60),
+    `| Field | Value |`,
+    `|-------|-------|`,
+    `| **Patient** | ${patient.name} |`,
+    `| **MRN** | ${patient.mrn} |`,
+    `| **DOB** | ${patient.dob} |`,
+    `| **Allergies** | ${patient.allergies || "None documented"} |`,
+    "",
+    "## Note Details",
+    "",
+    `| Field | Value |`,
+    `|-------|-------|`,
+    `| **Type** | ${note.note_type} |`,
+    `| **Created** | ${note.created_at} |`,
+    `| **Updated** | ${note.updated_at} |`,
+    "",
+    "---",
+    "",
+    "## Content",
     "",
     note.content,
   ].join("\n");
@@ -245,13 +254,13 @@ export async function syncNoteToProject(
 ): Promise<UploadResponse | null> {
   if (!isEnabled()) return null;
 
-  const text = formatNoteAsText(note, patient);
+  const text = formatNoteAsMarkdown(note, patient);
   const filename = `note-${note.id}-${note.note_type}-${note.created_at
     .replace(/[: ]/g, "-")
-    .slice(0, 19)}.txt`;
+    .slice(0, 19)}.md`;
 
   const form = new FormData();
-  form.append("file", new Blob([text], { type: "text/plain" }), filename);
+  form.append("file", new Blob([text], { type: "text/markdown" }), filename);
 
   const res = await fetch(`${BASE}/projects/${projectId}/upload`, {
     method: "POST",
