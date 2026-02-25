@@ -20,6 +20,18 @@ interface TropicaliaProject {
   modified_at: string;
 }
 
+async function listProjects(): Promise<TropicaliaProject[]> {
+  try {
+    const res = await fetch(`${BASE}/projects`, { headers: authHeaders() });
+    if (!res.ok) return [];
+    const data = await res.json();
+    // API may wrap in { projects: [...] } or return an array directly
+    return (Array.isArray(data) ? data : data.projects ?? []) as TropicaliaProject[];
+  } catch {
+    return [];
+  }
+}
+
 export async function createProject(
   name: string,
   description?: string
@@ -37,7 +49,14 @@ export async function createProject(
 }
 
 /**
- * Returns the Tropicalia project_id for the patient, creating one if needed.
+ * Returns the Tropicalia project_id for the patient.
+ *
+ * On each Vercel cold start the SQLite DB is fresh, so tropicalia_project_id
+ * is null even though the project already exists. We therefore:
+ *  1. Check the DB first (fast path for warm instances).
+ *  2. List all Tropicalia projects and find one whose name matches the patient.
+ *  3. Create a new project only if none found.
+ *
  * Returns null if TROPICALIA_API_KEY is not configured.
  */
 export async function ensurePatientProject(
@@ -53,19 +72,55 @@ export async function ensurePatientProject(
     | undefined;
 
   if (!patient) return null;
+
+  // Fast path: already linked in this DB instance
   if (patient.tropicalia_project_id) return patient.tropicalia_project_id;
 
-  const project = await createProject(
-    `${patient.name} — ${patient.mrn}`,
-    `Clinical records and notes for patient ${patient.name} (MRN: ${patient.mrn})`
-  );
+  // Slow path: look for an existing Tropicalia project by name
+  const expectedName = `${patient.name} — ${patient.mrn}`;
+  const existing = await listProjects();
+  const found = existing.find((p) => p.name === expectedName);
+
+  let projectId: string;
+  if (found) {
+    projectId = found.public_id;
+    console.log(`[Tropicalia] Relinked existing project ${projectId} for patient ${patient.name}`);
+  } else {
+    const project = await createProject(
+      expectedName,
+      `Clinical records and notes for patient ${patient.name} (MRN: ${patient.mrn})`
+    );
+    projectId = project.public_id;
+    console.log(`[Tropicalia] Created new project ${projectId} for patient ${patient.name}`);
+  }
 
   db.prepare("UPDATE patients SET tropicalia_project_id = ? WHERE id = ?").run(
-    project.public_id,
+    projectId,
     patientId
   );
 
-  return project.public_id;
+  return projectId;
+}
+
+// ─── Documents ───────────────────────────────────────────────────────────────
+
+interface TropicaliaDocument {
+  document_id: string;
+  filename: string;
+  created_at?: string;
+}
+
+async function listDocuments(projectId: string): Promise<TropicaliaDocument[]> {
+  try {
+    const res = await fetch(`${BASE}/projects/${projectId}/documents`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (Array.isArray(data) ? data : data.documents ?? []) as TropicaliaDocument[];
+  } catch {
+    return [];
+  }
 }
 
 // ─── Search / retrieval ───────────────────────────────────────────────────────
@@ -315,7 +370,8 @@ function formatPatientFullRecord(
 /**
  * Creates a Tropicalia project for the patient (if one doesn't exist) and
  * uploads a comprehensive document containing all their medical data.
- * Never throws — failures are logged but don't interrupt the caller.
+ * Skips the upload if the project already has documents (avoids duplicates
+ * across cold starts on Vercel).
  */
 export async function syncPatientFullRecord(patientId: number): Promise<void> {
   if (!isEnabled()) return;
@@ -323,6 +379,13 @@ export async function syncPatientFullRecord(patientId: number): Promise<void> {
   try {
     const projectId = await ensurePatientProject(patientId);
     if (!projectId) return;
+
+    // Skip upload if the project already has documents (cold-start re-run)
+    const existingDocs = await listDocuments(projectId);
+    if (existingDocs.length > 0) {
+      console.log(`[Tropicalia] Project ${projectId} already has ${existingDocs.length} doc(s), skipping upload`);
+      return;
+    }
 
     const db = getDb();
     const patient = db.prepare("SELECT * FROM patients WHERE id = ?").get(patientId) as
