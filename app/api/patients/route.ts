@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { getDb } from "@/lib/db";
 import { seedDatabase } from "@/lib/seed";
 import { ensurePatientProject, syncPatientFullRecord } from "@/lib/tropicalia";
@@ -15,13 +15,20 @@ export async function GET() {
       ORDER BY p.name ASC
     `).all() as Array<{ id: number; tropicalia_project_id: string | null }>;
 
-    // For any patient without a Tropicalia project, create one and upload their full record.
-    // Runs async and non-blocking so it never delays the response.
+    // For patients without a Tropicalia project, create one and upload their full record.
+    // `after()` keeps the Vercel serverless function alive until the work completes,
+    // so it is never killed when the response is sent.
     const unsynced = patients.filter((p) => !p.tropicalia_project_id);
-    for (const p of unsynced) {
-      syncPatientFullRecord(p.id).catch((err) =>
-        console.error("[Tropicalia] full-record sync error for patient", p.id, err)
-      );
+    if (unsynced.length > 0) {
+      after(async () => {
+        for (const p of unsynced) {
+          try {
+            await syncPatientFullRecord(p.id);
+          } catch (err) {
+            console.error("[Tropicalia] full-record sync error for patient", p.id, err);
+          }
+        }
+      });
     }
 
     return NextResponse.json(patients);
@@ -45,10 +52,15 @@ export async function POST(req: NextRequest) {
     );
     const patientId = result.lastInsertRowid as number;
 
-    // Create a Tropicalia project for the patient (non-blocking, best-effort)
-    ensurePatientProject(patientId).catch((err) =>
-      console.error("[Tropicalia] project creation error:", err)
-    );
+    // Create a Tropicalia project and upload a full record for the new patient.
+    // `after()` ensures this runs to completion even after the response is sent.
+    after(async () => {
+      try {
+        await syncPatientFullRecord(patientId);
+      } catch (err) {
+        console.error("[Tropicalia] project creation error:", err);
+      }
+    });
 
     const patient = db.prepare("SELECT * FROM patients WHERE id = ?").get(patientId);
     return NextResponse.json(patient, { status: 201 });
